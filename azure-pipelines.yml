@@ -9,8 +9,8 @@ variables:
   imageName: 'mycontainerfordevops.azurecr.io/azuredevopsfirstpush:$(Build.BuildId)'
   artifactName: 'drop'
 
-  RESOURCE_GROUP: 'devops'      # set in pipeline variables
-  AKS_CLUSTER: 'aksfordevops'   # set in pipeline variables
+  RESOURCE_GROUP: 'devops'
+  AKS_CLUSTER: 'aksfordevops'
   NAMESPACE: 'default'
 
 stages:
@@ -45,7 +45,6 @@ stages:
         qualifyImageName: false
         includeLatestTag: true
 
-    # ensure the manifest exists and is copied to the artifact staging directory
     - task: CopyFiles@2
       displayName: 'Copy manifest to artifact staging directory'
       inputs:
@@ -69,7 +68,6 @@ stages:
     pool:
       name: Default
     steps:
-    # download into a predictable folder: $(Pipeline.Workspace)/drop
     - task: DownloadPipelineArtifact@2
       displayName: 'Download pipeline artifact $(artifactName)'
       inputs:
@@ -82,7 +80,7 @@ stages:
         azureSubscription: $(azureSubscriptionEndpoint)
         scriptType: bash
         scriptLocation: inlineScript
-        failOnStandardError: true
+        failOnStandardError: false
         inlineScript: |
           set -euo pipefail
 
