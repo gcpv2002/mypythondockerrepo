@@ -1,14 +1,19 @@
-# Combined build + deploy pipeline (Kubectl@1)
+# .azure-pipelines.yml
 name: $(date:yyyyMMdd)$(rev:.r)
 
-trigger: none   # change if you want CI trigger
+trigger: none
 
 variables:
-  azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'   # service connection for ACR / Azure RM (keep in library if secret)
+  # Service connection / resource identifiers - set these in pipeline variables or replace here
+  azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'
   acrJson: '{"loginServer":"mycontainerfordevops.azurecr.io", "id" : "/subscriptions/309f0051-440e-4163-ba9d-1d1f2bb6bf5d/resourceGroups/devops/providers/Microsoft.ContainerRegistry/registries/mycontainerfordevops"}'
   imageName: 'mycontainerfordevops.azurecr.io/azuredevopsfirstpush:$(Build.BuildId)'
-  kubernetesServiceEndpoint: 'b241eb09-a51d-4f54-aec4-adde5febdbbc'   # your K8s service connection id
   artifactName: 'drop'
+
+  # AKS / ACR runtime settings - set these to your values (or create pipeline variables)
+  RESOURCE_GROUP: 'devops'            # <-- replace in pipeline variables
+  AKS_CLUSTER: 'aksfordevops'          # <-- replace in pipeline variables
+  NAMESPACE: 'default'                   # namespace to apply the manifest into
 
 stages:
 - stage: Build
@@ -71,44 +76,41 @@ stages:
         artifact: '$(artifactName)'
         path: '$(Pipeline.Workspace)'
 
-    # --- Preferred: use Kubectl task version 1 (available in Azure DevOps)
-    - task: Kubectl@1
-      displayName: 'kubectl apply (Kubectl@1)'
+    - task: AzureCLI@2
+      displayName: 'Azure CLI: get AKS creds, show manifest and kubectl apply'
       inputs:
-        # Kubectl@1 supports the same 'kubernetesServiceEndpoint' input used previously.
-        # Provide your Kubernetes service connection id/name (service connection created in Project Settings -> Service connections)
-        kubernetesServiceEndpoint: $(kubernetesServiceEndpoint)
-        namespace: 'default'
-        command: 'apply'
-        useConfigurationFile: 'true'
-        configuration: '$(Pipeline.Workspace)/$(artifactName)/azure-aks.yaml'
-        arguments: ''
-        secretType: 'dockerRegistry'
-        containerRegistryType: 'Azure Container Registry'
-        forceUpdate: 'true'
-        versionOrLocation: 'version'
-        versionSpec: '1.7.0'
-        checkLatest: 'false'
+        azureSubscription: $(azureSubscriptionEndpoint)
+        scriptType: bash
+        scriptLocation: inlineScript
+        failOnStandardError: true
+        inlineScript: |
+          set -euo pipefail
 
-    # --- Alternate fallback: if Kubectl task is not available in your org,
-    # uncomment the following steps which use Azure CLI to get AKS credentials and run kubectl.
-    # Make sure the agent has az installed (or run the install step) and the service connection has appropriate permissions.
-    #
-    # - task: AzureCLI@2
-    #   displayName: 'Azure CLI - get AKS creds and kubectl apply (fallback)'
-    #   inputs:
-    #     azureSubscription: $(azureSubscriptionEndpoint)
-    #     scriptType: bash
-    #     scriptLocation: inlineScript
-    #     inlineScript: |
-    #       # replace with your resource group and AKS cluster name
-    #       RESOURCE_GROUP="my-aks-rg"
-    #       AKS_CLUSTER="my-aks-cluster"
-    #
-    #       # get credentials for kubectl
-    #       az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$AKS_CLUSTER" --overwrite-existing
-    #
-    #       # apply manifest
-    #       kubectl apply -f "$(Pipeline.Workspace)/$(artifactName)/azure-aks.yaml" --namespace default
-    #
-    #   failOnStandardError: true
+          ARTIFACT_DIR="$(Pipeline.Workspace)/$(artifactName)"
+          MANIFEST="$ARTIFACT_DIR/azure-aks.yaml"
+
+          echo "Pipeline workspace: $(Pipeline.Workspace)"
+          echo "Listing artifact directory: $ARTIFACT_DIR"
+          ls -la "$ARTIFACT_DIR" || true
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: manifest not found at path: $MANIFEST"
+            exit 2
+          fi
+
+          echo "----- Manifest ($MANIFEST) -----"
+          sed -n '1,200p' "$MANIFEST" || true
+          echo "----- end manifest -----"
+
+          echo "Getting AKS credentials for cluster '${AKS_CLUSTER}' in resource group '${RESOURCE_GROUP}'"
+          az aks get-credentials --resource-group "${RESOURCE_GROUP}" --name "${AKS_CLUSTER}" --overwrite-existing
+
+          echo "kubectl context:"
+          kubectl config current-context || true
+          kubectl cluster-info || true
+
+          echo "Applying manifest"
+          kubectl apply -f "$MANIFEST" --namespace "${NAMESPACE}"
+
+          echo "Listing resources in namespace ${NAMESPACE}"
+          kubectl get all -n "${NAMESPACE}" -o wide || true
