@@ -4,16 +4,14 @@ name: $(date:yyyyMMdd)$(rev:.r)
 trigger: none
 
 variables:
-  # Service connection / resource identifiers - set these in pipeline variables or replace here
   azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'
   acrJson: '{"loginServer":"mycontainerfordevops.azurecr.io", "id" : "/subscriptions/309f0051-440e-4163-ba9d-1d1f2bb6bf5d/resourceGroups/devops/providers/Microsoft.ContainerRegistry/registries/mycontainerfordevops"}'
   imageName: 'mycontainerfordevops.azurecr.io/azuredevopsfirstpush:$(Build.BuildId)'
   artifactName: 'drop'
 
-  # AKS / ACR runtime settings - set these to your values (or create pipeline variables)
-  RESOURCE_GROUP: 'devops'            # <-- replace in pipeline variables
-  AKS_CLUSTER: 'aksfordevops'          # <-- replace in pipeline variables
-  NAMESPACE: 'default'                   # namespace to apply the manifest into
+  RESOURCE_GROUP: 'devops'      # set in pipeline variables
+  AKS_CLUSTER: 'aksfordevops'   # set in pipeline variables
+  NAMESPACE: 'default'
 
 stages:
 - stage: Build
@@ -47,11 +45,12 @@ stages:
         qualifyImageName: false
         includeLatestTag: true
 
+    # ensure the manifest exists and is copied to the artifact staging directory
     - task: CopyFiles@2
-      displayName: 'Copy Files to: $(Build.ArtifactStagingDirectory)'
+      displayName: 'Copy manifest to artifact staging directory'
       inputs:
         Contents: azure-aks.yaml
-        TargetFolder: $(Build.ArtifactStagingDirectory)
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Artifact: $(artifactName)'
@@ -70,11 +69,12 @@ stages:
     pool:
       name: Default
     steps:
+    # download into a predictable folder: $(Pipeline.Workspace)/drop
     - task: DownloadPipelineArtifact@2
-      displayName: 'Download artifact: $(artifactName)'
+      displayName: 'Download pipeline artifact $(artifactName)'
       inputs:
         artifact: '$(artifactName)'
-        path: '$(Pipeline.Workspace)'
+        path: '$(Pipeline.Workspace)/$(artifactName)'
 
     - task: AzureCLI@2
       displayName: 'Azure CLI: get AKS creds, show manifest and kubectl apply'
@@ -87,15 +87,22 @@ stages:
           set -euo pipefail
 
           ARTIFACT_DIR="$(Pipeline.Workspace)/$(artifactName)"
-          MANIFEST="$ARTIFACT_DIR/azure-aks.yaml"
-
           echo "Pipeline workspace: $(Pipeline.Workspace)"
-          echo "Listing artifact directory: $ARTIFACT_DIR"
-          ls -la "$ARTIFACT_DIR" || true
-
-          if [ ! -f "$MANIFEST" ]; then
-            echo "ERROR: manifest not found at path: $MANIFEST"
+          echo "Checking artifact directory: $ARTIFACT_DIR"
+          if [ -d "$ARTIFACT_DIR" ]; then
+            echo "Files in artifact directory:"
+            ls -la "$ARTIFACT_DIR" || true
+          else
+            echo "ERROR: artifact directory does not exist: $ARTIFACT_DIR"
             exit 2
+          fi
+
+          MANIFEST="$ARTIFACT_DIR/azure-aks.yaml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: manifest not found at expected path: $MANIFEST"
+            echo "Contents of artifact dir:"
+            ls -la "$ARTIFACT_DIR" || true
+            exit 3
           fi
 
           echo "----- Manifest ($MANIFEST) -----"
