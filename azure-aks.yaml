@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: mypythondockerrepo
-        image: gcpv2002/azuredevopsfirstpush:latest
+        image: mycontainerfordevops.azurecr.io/azuredevopsfirstpush:latest
         ports:
         - containerPort: 5000
 ---
