@@ -1,14 +1,13 @@
-# Combined build + deploy pipeline
+# Combined build + deploy pipeline (Kubectl@1)
 name: $(date:yyyyMMdd)$(rev:.r)
 
-trigger: none   # change to e.g. `branches: { include: [ main ] }` if you want CI trigger
+trigger: none   # change if you want CI trigger
 
 variables:
-  # keep these in pipeline variables / variable groups or replace here
-  azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'   # service connection used for ACR tasks
+  azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'   # service connection for ACR / Azure RM (keep in library if secret)
   acrJson: '{"loginServer":"mycontainerfordevops.azurecr.io", "id" : "/subscriptions/309f0051-440e-4163-ba9d-1d1f2bb6bf5d/resourceGroups/devops/providers/Microsoft.ContainerRegistry/registries/mycontainerfordevops"}'
   imageName: 'mycontainerfordevops.azurecr.io/azuredevopsfirstpush:$(Build.BuildId)'
-  kubernetesServiceEndpoint: 'b241eb09-a51d-4f54-aec4-adde5febdbbc'   # your AKS kubernetes service connection id
+  kubernetesServiceEndpoint: 'b241eb09-a51d-4f54-aec4-adde5febdbbc'   # your K8s service connection id
   artifactName: 'drop'
 
 stages:
@@ -72,10 +71,12 @@ stages:
         artifact: '$(artifactName)'
         path: '$(Pipeline.Workspace)'
 
-    # run kubectl apply using the same task used in your release pipeline
-    - task: Kubectl@0
-      displayName: 'kubectl apply'
+    # --- Preferred: use Kubectl task version 1 (available in Azure DevOps)
+    - task: Kubectl@1
+      displayName: 'kubectl apply (Kubectl@1)'
       inputs:
+        # Kubectl@1 supports the same 'kubernetesServiceEndpoint' input used previously.
+        # Provide your Kubernetes service connection id/name (service connection created in Project Settings -> Service connections)
         kubernetesServiceEndpoint: $(kubernetesServiceEndpoint)
         namespace: 'default'
         command: 'apply'
@@ -88,3 +89,26 @@ stages:
         versionOrLocation: 'version'
         versionSpec: '1.7.0'
         checkLatest: 'false'
+
+    # --- Alternate fallback: if Kubectl task is not available in your org,
+    # uncomment the following steps which use Azure CLI to get AKS credentials and run kubectl.
+    # Make sure the agent has az installed (or run the install step) and the service connection has appropriate permissions.
+    #
+    # - task: AzureCLI@2
+    #   displayName: 'Azure CLI - get AKS creds and kubectl apply (fallback)'
+    #   inputs:
+    #     azureSubscription: $(azureSubscriptionEndpoint)
+    #     scriptType: bash
+    #     scriptLocation: inlineScript
+    #     inlineScript: |
+    #       # replace with your resource group and AKS cluster name
+    #       RESOURCE_GROUP="my-aks-rg"
+    #       AKS_CLUSTER="my-aks-cluster"
+    #
+    #       # get credentials for kubectl
+    #       az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$AKS_CLUSTER" --overwrite-existing
+    #
+    #       # apply manifest
+    #       kubectl apply -f "$(Pipeline.Workspace)/$(artifactName)/azure-aks.yaml" --namespace default
+    #
+    #   failOnStandardError: true
