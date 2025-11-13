@@ -3,13 +3,86 @@
 # Add steps that build, run tests, deploy, and more:
 # https://aka.ms/yaml
 
+# azure-pipelines.yml
 trigger:
-- master
+  branches:
+    include:
+      - main
 
 pool:
-  vmImage: ubuntu-latest
+  vmImage: 'ubuntu-latest'
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+variables:
+  # Replace these values or define them in the pipeline UI (recommended for secrets)
+  ACR_NAME: 'myacr'                            # registry name (no .azurecr.io)
+  ACR_SERVICE_CONNECTION: 'ACR-Service-Conn'  # Azure DevOps service connection (ARM) that targets the ACR
+  ACR_REPOSITORY: 'mypythondockerrepo'        # image repository name inside ACR
+  IMAGE_TAG: '$(Build.SourceBranchName)-$(Build.BuildId)'  # tag format; change if desired
+  K8S_SERVICE_CONNECTION: 'AKS-Service-Conn'  # Azure DevOps service connection for AKS
+  K8S_NAMESPACE: 'default'
+  MANIFEST_PATH: 'azure-aks.yaml'             # path to k8s manifest inside your repo (update if different)
+  DockerfilePath: 'Dockerfile'
+  buildContext: '.'
 
+stages:
+- stage: BuildAndPush
+  displayName: Build & Push image to ACR
+  jobs:
+  - job: Build
+    displayName: Build image and push to ACR
+    steps:
+      - checkout: self
+
+      - task: Docker@2
+        displayName: Build and push image to ACR
+        inputs:
+          command: buildAndPush
+          containerRegistry: '$(ACR_SERVICE_CONNECTION)'
+          repository: '$(ACR_NAME).azurecr.io/$(ACR_REPOSITORY)'
+          dockerfile: '$(DockerfilePath)'
+          buildContext: '$(buildContext)'
+          tags: |
+            $(IMAGE_TAG)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish manifest artifact (optional)
+        inputs:
+          targetPath: '$(System.DefaultWorkingDirectory)'
+          artifact: 'source'
+
+- stage: DeployToAKS
+  displayName: Deploy to AKS
+  dependsOn: BuildAndPush
+  condition: succeeded()
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy to AKS
+    environment: 'aks/production'   # optional: name of environment in Azure DevOps
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+
+            # KubernetesManifest task will update image(s) in your manifest and deploy
+            - task: KubernetesManifest@0
+              displayName: Deploy manifest (update image)
+              inputs:
+                action: deploy
+                kubernetesServiceConnection: '$(K8S_SERVICE_CONNECTION)'
+                namespace: '$(K8S_NAMESPACE)'
+                manifests: |
+                  $(MANIFEST_PATH)
+                containers: |
+                  $(ACR_NAME).azurecr.io/$(ACR_REPOSITORY):$(IMAGE_TAG)
+                recreate: false
+
+            - task: Kubectl@1
+              displayName: Verify rollout status
+              inputs:
+                kubernetesServiceEndpoint: '$(K8S_SERVICE_CONNECTION)'
+                namespace: '$(K8S_NAMESPACE)'
+                command: rollout
+                arguments: 'status deployment/$(ACR_REPOSITORY) --timeout=120s'
