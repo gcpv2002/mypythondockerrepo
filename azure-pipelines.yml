@@ -1,19 +1,90 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+# Combined build + deploy pipeline
+name: $(date:yyyyMMdd)$(rev:.r)
 
-trigger:
-- master
+trigger: none   # change to e.g. `branches: { include: [ main ] }` if you want CI trigger
 
-pool:
-  vmImage: ubuntu-latest
+variables:
+  # keep these in pipeline variables / variable groups or replace here
+  azureSubscriptionEndpoint: '222211d0-c114-439a-8826-2d7498d57072'   # service connection used for ACR tasks
+  acrJson: '{"loginServer":"mycontainerfordevops.azurecr.io", "id" : "/subscriptions/309f0051-440e-4163-ba9d-1d1f2bb6bf5d/resourceGroups/devops/providers/Microsoft.ContainerRegistry/registries/mycontainerfordevops"}'
+  imageName: 'mycontainerfordevops.azurecr.io/azuredevopsfirstpush:$(Build.BuildId)'
+  kubernetesServiceEndpoint: 'b241eb09-a51d-4f54-aec4-adde5febdbbc'   # your AKS kubernetes service connection id
+  artifactName: 'drop'
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+stages:
+- stage: Build
+  displayName: Build and push image
+  jobs:
+  - job: Job_1
+    displayName: Agent job 1
+    pool:
+      name: Default
+    steps:
+    - checkout: self
+      clean: true
+      fetchTags: false
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+    - task: Docker@0
+      displayName: Build an image
+      inputs:
+        azureSubscriptionEndpoint: $(azureSubscriptionEndpoint)
+        azureContainerRegistry: '$(acrJson)'
+        imageName: '$(imageName)'
+        qualifyImageName: false
+        includeLatestTag: true
+
+    - task: Docker@0
+      displayName: Push an image
+      inputs:
+        azureSubscriptionEndpoint: $(azureSubscriptionEndpoint)
+        azureContainerRegistry: '$(acrJson)'
+        action: 'Push an image'
+        imageName: '$(imageName)'
+        qualifyImageName: false
+        includeLatestTag: true
+
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: $(Build.ArtifactStagingDirectory)'
+      inputs:
+        Contents: azure-aks.yaml
+        TargetFolder: $(Build.ArtifactStagingDirectory)
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Artifact: $(artifactName)'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: '$(artifactName)'
+        publishLocation: 'pipeline'
+
+- stage: Deploy
+  displayName: Deploy to AKS
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: Deploy_Job
+    displayName: Agent job - Deploy
+    pool:
+      name: Default
+    steps:
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download artifact: $(artifactName)'
+      inputs:
+        artifact: '$(artifactName)'
+        path: '$(Pipeline.Workspace)'
+
+    # run kubectl apply using the same task used in your release pipeline
+    - task: Kubectl@0
+      displayName: 'kubectl apply'
+      inputs:
+        kubernetesServiceEndpoint: $(kubernetesServiceEndpoint)
+        namespace: 'default'
+        command: 'apply'
+        useConfigurationFile: 'true'
+        configuration: '$(Pipeline.Workspace)/$(artifactName)/azure-aks.yaml'
+        arguments: ''
+        secretType: 'dockerRegistry'
+        containerRegistryType: 'Azure Container Registry'
+        forceUpdate: 'true'
+        versionOrLocation: 'version'
+        versionSpec: '1.7.0'
+        checkLatest: 'false'
